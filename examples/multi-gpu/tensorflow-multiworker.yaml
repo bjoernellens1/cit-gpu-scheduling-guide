@@ -1,0 +1,104 @@
+# TensorFlow MultiWorkerMirroredStrategy, gang-scheduled across 2 pods x
+# 2 GPUs each. TensorFlow counterpart of pytorch-ddp-multi-pod.yaml -- see
+# that file's comments and ../../docs/gang-scheduling.md for the full
+# rationale (PodGroup requirement, exclusive GPU allocation, etc).
+#
+# TF_CONFIG is the TensorFlow-native equivalent of torchrun's
+# --node-rank/--master-addr -- each worker needs a JSON env var describing
+# the full cluster topology and its own index.
+apiVersion: scheduling.run.ai/v2alpha2
+kind: PodGroup
+metadata:
+  name: tensorflow-multiworker-pg
+  namespace: <your-namespace>
+spec:
+  minMember: 2
+  queue: batch
+  priorityClassName: low-priority
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tensorflow-multiworker
+  namespace: <your-namespace>
+spec:
+  clusterIP: None
+  selector:
+    job-name: tensorflow-multiworker
+  ports:
+    - name: tf
+      port: 2222
+      targetPort: 2222
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tensorflow-multiworker
+  namespace: <your-namespace>
+spec:
+  completionMode: Indexed
+  parallelism: 2
+  completions: 2
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        kai.scheduler/queue: batch
+        job-name: tensorflow-multiworker
+      annotations:
+        pod-group-name: tensorflow-multiworker-pg
+    spec:
+      schedulerName: kai-scheduler
+      priorityClassName: low-priority
+      subdomain: tensorflow-multiworker
+      restartPolicy: Never
+      containers:
+        - name: tensorflow
+          image: your-registry/your-tf-image:latest
+          command: ["bash", "-c"]
+          args:
+            - |
+              export TF_CONFIG=$(python3 -c "
+              import json, os
+              idx = int(os.environ['JOB_COMPLETION_INDEX'])
+              workers = [f'tensorflow-multiworker-{i}.tensorflow-multiworker:2222' for i in range(2)]
+              print(json.dumps({'cluster': {'worker': workers}, 'task': {'type': 'worker', 'index': idx}}))
+              ")
+              python train_multiworker.py \
+                --checkpoint-dir=/checkpoints \
+                --data-dir=/data \
+                --resume-from-latest
+          env:
+            - name: JOB_COMPLETION_INDEX
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
+            - name: TF_FORCE_GPU_ALLOW_GROWTH
+              value: "true"
+          resources:
+            limits:
+              nvidia.com/gpu: "2"
+              cpu: "16"
+              memory: "64Gi"
+            requests:
+              cpu: "8"
+              memory: "32Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+              readOnly: true
+            - name: checkpoints
+              mountPath: /checkpoints
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-pvc
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints-pvc
+# In train_multiworker.py, use tf.distribute.MultiWorkerMirroredStrategy()
+# and gate checkpoint writes appropriately -- TF's multi-worker checkpoint
+# semantics differ slightly from PyTorch DDP (all workers must participate
+# in the save call itself, but only the chief writes to the real path;
+# others write to a temporary/scratch path). See TensorFlow's own
+# multi-worker training + fault tolerance guide for the exact pattern.

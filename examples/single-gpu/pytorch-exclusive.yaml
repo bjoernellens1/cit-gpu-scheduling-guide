@@ -1,0 +1,53 @@
+# Single-GPU, exclusive (whole-device) PyTorch training job.
+#
+# Use this when your job doesn't need to share the GPU with other work --
+# e.g. it needs the whole card's memory/compute, or predictable performance
+# without a noisy neighbor. See ../../docs/gpu-sharing-modes.md for when to
+# choose this vs. the MPS-shared variant.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pytorch-single-gpu-exclusive
+  namespace: <your-namespace>
+  labels:
+    kai.scheduler/queue: batch          # <-- your queue name
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        kai.scheduler/queue: batch
+    spec:
+      schedulerName: kai-scheduler
+      priorityClassName: low-priority   # <-- your priority class
+      restartPolicy: OnFailure          # OK here: single pod, in-place retry is safe
+      containers:
+        - name: trainer
+          image: your-registry/your-image:latest
+          command: ["python"]
+          args:
+            - "train.py"
+            - "--checkpoint-dir=/checkpoints"
+            - "--data-dir=/data"
+            - "--resume-from-latest"
+          resources:
+            limits:
+              nvidia.com/gpu: "1"       # whole-device, exclusive allocation
+              cpu: "8"
+              memory: "32Gi"
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+              readOnly: true
+            - name: checkpoints
+              mountPath: /checkpoints
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-pvc
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints-pvc

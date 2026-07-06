@@ -1,0 +1,118 @@
+# Distributed PyTorch DDP training spanning multiple PHYSICAL NODES (not
+# just multiple pods on one node -- see examples/multi-gpu/ for the
+# single-node case). Read ../../docs/multi-node-networking.md BEFORE using
+# this -- the hostNetwork/NCCL env vars below are the difference between
+# ~0.39 GB/s and closer to line-rate inter-node bandwidth on a non-RDMA
+# Ethernet fabric.
+apiVersion: scheduling.run.ai/v2alpha2
+kind: PodGroup
+metadata:
+  name: pytorch-ddp-multi-node-pg
+  namespace: <your-namespace>
+spec:
+  minMember: 4   # total pod count -- adjust to your worker count
+  queue: batch
+  priorityClassName: low-priority
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pytorch-ddp-multi-node
+  namespace: <your-namespace>
+spec:
+  clusterIP: None
+  selector:
+    job-name: pytorch-ddp-multi-node
+  ports:
+    - name: torchrun
+      port: 29500
+      targetPort: 29500
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pytorch-ddp-multi-node
+  namespace: <your-namespace>
+spec:
+  completionMode: Indexed
+  parallelism: 4
+  completions: 4
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        kai.scheduler/queue: batch
+        job-name: pytorch-ddp-multi-node
+      annotations:
+        pod-group-name: pytorch-ddp-multi-node-pg
+    spec:
+      schedulerName: kai-scheduler
+      priorityClassName: low-priority
+      # See docs/multi-node-networking.md -- bypasses the CNI overlay
+      # (e.g. Flannel VXLAN) for NCCL inter-node traffic. Trade-off: gives
+      # up per-pod network isolation. Confirm your own fabric's real
+      # bottleneck before assuming this is the fix for you (see the doc's
+      # benchmark-before-and-after guidance, and the virtio-net note if
+      # your nodes are VMs).
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      subdomain: pytorch-ddp-multi-node
+      restartPolicy: Never
+      containers:
+        - name: pytorch
+          image: your-registry/your-image:latest
+          command: ["bash", "-c"]
+          args:
+            - |
+              torchrun \
+                --nnodes=4 \
+                --nproc_per_node=2 \
+                --node-rank=${JOB_COMPLETION_INDEX} \
+                --master-addr=pytorch-ddp-multi-node-0.pytorch-ddp-multi-node \
+                --master-port=29500 \
+                train_ddp.py \
+                  --checkpoint-dir=/checkpoints \
+                  --data-dir=/data \
+                  --resume-from-latest
+          env:
+            - name: JOB_COMPLETION_INDEX
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
+            - name: NCCL_DEBUG
+              value: "INFO"
+            # torchrun silently defaults this to 1 per process otherwise --
+            # see docs/multi-node-networking.md.
+            - name: OMP_NUM_THREADS
+              value: "4"
+            # NCCL socket transport tuning for non-RDMA Ethernet -- starting
+            # point, re-benchmark on your own fabric (see the doc).
+            - name: NCCL_SOCKET_NTHREADS
+              value: "4"
+            - name: NCCL_NSOCKS_PERTHREAD
+              value: "4"
+            # Only meaningful combined with hostNetwork: true above --
+            # confirm your own node's real physical interface name first.
+            - name: NCCL_SOCKET_IFNAME
+              value: "eth0"
+          resources:
+            limits:
+              nvidia.com/gpu: "2"
+              cpu: "16"
+              memory: "64Gi"
+            requests:
+              cpu: "8"
+              memory: "32Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+              readOnly: true
+            - name: checkpoints
+              mountPath: /checkpoints
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-pvc
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints-pvc

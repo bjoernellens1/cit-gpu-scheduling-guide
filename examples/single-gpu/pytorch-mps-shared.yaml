@@ -1,0 +1,85 @@
+# Single-GPU, MPS-shared (fractional) PyTorch training job.
+#
+# READ ../../docs/gpu-sharing-modes.md BEFORE USING THIS -- the
+# CUDA_MPS_PIPE_DIRECTORY/CUDA_MPS_LOG_DIRECTORY env vars and matching
+# volume mounts below are NOT optional extras, they are required for
+# CUDA_MPS_PINNED_DEVICE_MEM_LIMIT to have any effect at all. Omitting them
+# means your VRAM limit is silently unenforced -- confirmed live, a test
+# without this wiring allocated 16x its configured limit with zero errors.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pytorch-single-gpu-mps-shared
+  namespace: <your-namespace>
+  labels:
+    kai.scheduler/queue: batch
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        kai.scheduler/queue: batch
+      annotations:
+        # MiB value -- keep this in sync with CUDA_MPS_PINNED_DEVICE_MEM_LIMIT
+        # below. Do NOT also set resources.limits."nvidia.com/gpu" on this
+        # pod -- gpu-memory and nvidia.com/gpu are alternative, non-combinable
+        # allocation paths.
+        gpu-memory: "10240"
+    spec:
+      schedulerName: kai-scheduler
+      priorityClassName: low-priority
+      restartPolicy: OnFailure
+      containers:
+        - name: trainer
+          image: your-registry/your-image:latest
+          command: ["python"]
+          args:
+            - "train.py"
+            - "--checkpoint-dir=/checkpoints"
+            - "--data-dir=/data"
+            - "--resume-from-latest"
+          env:
+            # Enforces the declared gpu-memory value -- KAI schedules
+            # against the annotation above but does NOT enforce it itself.
+            - name: CUDA_MPS_PINNED_DEVICE_MEM_LIMIT
+              value: "0=10240M"
+            # REQUIRED alongside the above, or the limit is silently
+            # unenforced -- see docs/gpu-sharing-modes.md.
+            - name: CUDA_MPS_PIPE_DIRECTORY
+              value: "/mps/nvidia.com/gpu/pipe"
+            - name: CUDA_MPS_LOG_DIRECTORY
+              value: "/mps/nvidia.com/gpu/log"
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "8"
+              memory: "32Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+              readOnly: true
+            - name: checkpoints
+              mountPath: /checkpoints
+            - name: mps-pipe
+              mountPath: /mps/nvidia.com/gpu/pipe
+            - name: mps-log
+              mountPath: /mps/nvidia.com/gpu/log
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-pvc
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints-pvc
+        # Confirm this hostPath against your own cluster's MPS control
+        # daemon pod's actual volume mounts before assuming it's correct.
+        - name: mps-pipe
+          hostPath:
+            path: /run/nvidia/mps/nvidia.com/gpu/pipe
+            type: DirectoryOrCreate
+        - name: mps-log
+          hostPath:
+            path: /run/nvidia/mps/nvidia.com/gpu/log
+            type: DirectoryOrCreate

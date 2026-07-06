@@ -1,0 +1,75 @@
+# Single-GPU, MPS-shared (fractional) TensorFlow training job.
+# TensorFlow counterpart of pytorch-mps-shared.yaml -- READ
+# ../../docs/gpu-sharing-modes.md BEFORE USING THIS. The MPS pipe/log
+# wiring below is required, not optional -- see that doc for why.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tensorflow-single-gpu-mps-shared
+  namespace: <your-namespace>
+  labels:
+    kai.scheduler/queue: batch
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        kai.scheduler/queue: batch
+      annotations:
+        gpu-memory: "20480"   # half a device; keep in sync with the env var below
+    spec:
+      schedulerName: kai-scheduler
+      priorityClassName: low-priority
+      restartPolicy: OnFailure
+      containers:
+        - name: trainer
+          image: your-registry/your-tf-image:latest
+          command: ["python"]
+          args:
+            - "train.py"
+            - "--checkpoint-dir=/checkpoints"
+            - "--data-dir=/data"
+            - "--resume-from-latest"
+          env:
+            - name: CUDA_MPS_PINNED_DEVICE_MEM_LIMIT
+              value: "0=20480M"
+            - name: CUDA_MPS_PIPE_DIRECTORY
+              value: "/mps/nvidia.com/gpu/pipe"
+            - name: CUDA_MPS_LOG_DIRECTORY
+              value: "/mps/nvidia.com/gpu/log"
+            # Keeps TF from grabbing all GPU memory upfront, which would
+            # conflict with the MPS memory limit above.
+            - name: TF_FORCE_GPU_ALLOW_GROWTH
+              value: "true"
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "8"
+              memory: "32Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+              readOnly: true
+            - name: checkpoints
+              mountPath: /checkpoints
+            - name: mps-pipe
+              mountPath: /mps/nvidia.com/gpu/pipe
+            - name: mps-log
+              mountPath: /mps/nvidia.com/gpu/log
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-pvc
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints-pvc
+        - name: mps-pipe
+          hostPath:
+            path: /run/nvidia/mps/nvidia.com/gpu/pipe
+            type: DirectoryOrCreate
+        - name: mps-log
+          hostPath:
+            path: /run/nvidia/mps/nvidia.com/gpu/log
+            type: DirectoryOrCreate

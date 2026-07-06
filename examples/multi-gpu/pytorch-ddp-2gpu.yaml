@@ -1,0 +1,57 @@
+# 2-GPU PyTorch DDP training, single pod, single node -- the simplest
+# multi-GPU case (no gang-scheduling across pods needed since it's one pod).
+# See ../../docs/gang-scheduling.md for why this uses exclusive GPU
+# allocation, and why that matters for real bandwidth (measured
+# ~100-230 GB/s intra-pod vs ~1-1.4 GB/s cross-pod on the same hardware).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pytorch-ddp-2gpu
+  namespace: <your-namespace>
+  labels:
+    kai.scheduler/queue: batch
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        kai.scheduler/queue: batch
+    spec:
+      schedulerName: kai-scheduler
+      priorityClassName: low-priority
+      restartPolicy: Never
+      containers:
+        - name: pytorch
+          image: your-registry/your-image:latest
+          command: ["torchrun"]
+          args:
+            - "--standalone"
+            - "--nproc_per_node=2"
+            - "train_ddp.py"
+            - "--checkpoint-dir=/checkpoints"
+            - "--data-dir=/data"
+            - "--resume-from-latest"
+          env:
+            - name: OMP_NUM_THREADS
+              value: "4"    # set to requests.cpu / nproc_per_node
+          resources:
+            limits:
+              nvidia.com/gpu: "2"   # exclusive, non-fractional -- required for real NVLink/PCIe P2P
+              cpu: "16"
+              memory: "64Gi"
+            requests:
+              cpu: "8"
+              memory: "32Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+              readOnly: true
+            - name: checkpoints
+              mountPath: /checkpoints
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-pvc
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints-pvc

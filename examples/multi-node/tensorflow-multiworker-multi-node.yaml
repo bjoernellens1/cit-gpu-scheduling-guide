@@ -1,0 +1,104 @@
+# TensorFlow MultiWorkerMirroredStrategy spanning multiple physical nodes.
+# TensorFlow counterpart of pytorch-ddp-multi-node.yaml -- see that file's
+# comments and ../../docs/multi-node-networking.md for the full networking
+# rationale (hostNetwork, NCCL socket tuning). NCCL_* env vars still apply
+# if your TensorFlow build uses NCCL as its collective-ops implementation
+# (the default for multi-GPU MultiWorkerMirroredStrategy on NVIDIA GPUs).
+apiVersion: scheduling.run.ai/v2alpha2
+kind: PodGroup
+metadata:
+  name: tensorflow-multiworker-multi-node-pg
+  namespace: <your-namespace>
+spec:
+  minMember: 4
+  queue: batch
+  priorityClassName: low-priority
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tensorflow-multiworker-multi-node
+  namespace: <your-namespace>
+spec:
+  clusterIP: None
+  selector:
+    job-name: tensorflow-multiworker-multi-node
+  ports:
+    - name: tf
+      port: 2222
+      targetPort: 2222
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tensorflow-multiworker-multi-node
+  namespace: <your-namespace>
+spec:
+  completionMode: Indexed
+  parallelism: 4
+  completions: 4
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        kai.scheduler/queue: batch
+        job-name: tensorflow-multiworker-multi-node
+      annotations:
+        pod-group-name: tensorflow-multiworker-multi-node-pg
+    spec:
+      schedulerName: kai-scheduler
+      priorityClassName: low-priority
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      subdomain: tensorflow-multiworker-multi-node
+      restartPolicy: Never
+      containers:
+        - name: tensorflow
+          image: your-registry/your-tf-image:latest
+          command: ["bash", "-c"]
+          args:
+            - |
+              export TF_CONFIG=$(python3 -c "
+              import json, os
+              idx = int(os.environ['JOB_COMPLETION_INDEX'])
+              workers = [f'tensorflow-multiworker-multi-node-{i}.tensorflow-multiworker-multi-node:2222' for i in range(4)]
+              print(json.dumps({'cluster': {'worker': workers}, 'task': {'type': 'worker', 'index': idx}}))
+              ")
+              python train_multiworker.py \
+                --checkpoint-dir=/checkpoints \
+                --data-dir=/data \
+                --resume-from-latest
+          env:
+            - name: JOB_COMPLETION_INDEX
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
+            - name: TF_FORCE_GPU_ALLOW_GROWTH
+              value: "true"
+            - name: NCCL_SOCKET_NTHREADS
+              value: "4"
+            - name: NCCL_NSOCKS_PERTHREAD
+              value: "4"
+            - name: NCCL_SOCKET_IFNAME
+              value: "eth0"
+          resources:
+            limits:
+              nvidia.com/gpu: "2"
+              cpu: "16"
+              memory: "64Gi"
+            requests:
+              cpu: "8"
+              memory: "32Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+              readOnly: true
+            - name: checkpoints
+              mountPath: /checkpoints
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-pvc
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints-pvc

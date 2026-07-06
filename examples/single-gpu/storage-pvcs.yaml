@@ -1,0 +1,31 @@
+# Shared PVCs used by every example in this repo. Apply this once, then
+# apply whichever job manifest(s) you want -- they all reference these same
+# claim names. See ../../docs/storage.md for the rationale (why split
+# dataset/checkpoints, why not node-local storage, etc).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: training-data-pvc
+  namespace: <your-namespace>
+spec:
+  # Meant to point at a pre-populated dataset, not an empty freshly
+  # provisioned volume -- see docs/storage.md.
+  accessModes:
+    - ReadOnlyMany
+  storageClassName: <your-rwx-storage-class>
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: training-checkpoints-pvc
+  namespace: <your-namespace>
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: <your-rwx-storage-class>
+  resources:
+    requests:
+      storage: 50Gi
