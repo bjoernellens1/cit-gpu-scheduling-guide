@@ -37,6 +37,7 @@ RDMA fabric), the concepts still mostly apply but some specifics won't.
 | Run a small/cheap job that can share a GPU with others | [`examples/single-gpu/pytorch-mps-shared.yaml`](examples/single-gpu/pytorch-mps-shared.yaml) | `gpu-memory` annotation |
 | Train with real multi-GPU speedup (DDP / MultiWorkerMirroredStrategy) on one node | [`examples/multi-gpu/`](examples/multi-gpu/) | gang-scheduled `PodGroup` |
 | Scale training across multiple physical nodes | [`examples/multi-node/`](examples/multi-node/) | gang-scheduled `PodGroup` + NCCL tuning |
+| Run a hyperparameter sweep/ablation (many related jobs), or skip writing YAML entirely | [`ablator`](https://github.com/bjoernellens1/ablator) — see [docs/ablator.md](docs/ablator.md) | generates the manifests below for you |
 
 ## Table of contents
 
@@ -53,6 +54,10 @@ RDMA fabric), the concepts still mostly apply but some specifics won't.
   classes, and the preemption threshold gotcha
 - [docs/storage.md](docs/storage.md) — checkpoint/dataset storage patterns
   that survive rescheduling and preemption
+- [docs/ablator.md](docs/ablator.md) — using
+  [`ablator`](https://github.com/bjoernellens1/ablator) to generate and
+  submit these manifests for you, for sweeps/ablations or when you'd
+  rather not hand-write YAML
 
 ## Examples
 
