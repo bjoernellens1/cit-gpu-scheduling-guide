@@ -95,7 +95,7 @@ hostname_patterns = ["*"]
 
 [machines.a100cluster]
 backend = "k8s"
-namespace = "cps-users"
+namespace = "<your-namespace>"   # your Rancher-assigned namespace, see docs/cluster-access.md
 kai_queue = "batch"
 priority_class = "kai-batch-low"
 gpu_count = 1
