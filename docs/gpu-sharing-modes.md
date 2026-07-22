@@ -83,39 +83,79 @@ trust the env var alone; test it.
 > confirm it against your own cluster's MPS daemon pod's volume mounts
 > before assuming this path is correct for you.
 
-## Gotcha: force-deleting a pod can leave a GPU stuck "busy" until the MPS daemon restarts
+## Gotcha: `EXCLUSIVE_PROCESS` compute mode collides with plain-exclusive pods on an MPS-shared cluster
 
-**Symptom**: after force-deleting a pod that was mid-spawn/holding a GPU
-(`kubectl delete pod ... --grace-period=0 --force`), every subsequent real
-CUDA workload on that node's GPUs fails deterministically with
+**Symptom**: a plain-exclusive GPU pod (`nvidia.com/gpu: N`, no fractional
+annotation, never routes through MPS) fails deterministically with
 `RuntimeError: CUDA error: CUDA-capable device(s) is/are busy or
 unavailable`, even in complete isolation (a single pod, no other workload,
 no other process shown by `nvidia-smi --query-compute-apps` other than
 `nvidia-cuda-mps-server`). `nvidia-smi` itself (query-only) still works
 fine, and ECC/throttle status is clean — this is not a hardware fault.
 
-**Root cause**: the GPUs backing an MPS control daemon run in
-`Exclusive_Process` compute mode (required for the MPS server's own
-context). Force-killing a client process mid-context-teardown — or just
-the general churn of pods rapidly claiming/releasing a device in this mode
-— can leave a stale exclusive-mode lock at the driver level that a plain
-`nvidia-smi --gpu-reset` cannot clear (`In use by another client`,
-referring to the still-running MPS server's own persistent context).
+**Root cause**: if your cluster runs GPUs in `Exclusive_Process` compute
+mode (commonly required/assumed for an MPS control daemon's own server
+context), only **one** CUDA context is allowed per GPU at a time. An MPS
+control daemon's `nvidia-cuda-mps-server` process holds that one slot
+**continuously, independent of whether any MPS client is currently
+connected** — it doesn't release the slot just because no fractional job
+happens to be running right now. If your scheduler treats GPUs as an
+elastic pool where any physical GPU can serve either a fractional
+(MPS-shared) or a plain-exclusive pod at different times, a plain-exclusive
+pod scheduled onto a GPU with *no active MPS client* still collides with
+the resident server process and fails. This is a structural
+sharing-model/compute-mode mismatch, not a rare race tied to pod deletion,
+crashes, or any specific lifecycle event — it will recur on any GPU the
+scheduler hands from MPS-shared use back to exclusive use, for as long as
+the MPS daemon itself is running on that node in `Exclusive_Process` mode.
 
-**Fix (verified, no node power cycle needed)**: delete the standalone MPS
-control daemon pod on the affected node and let its DaemonSet recreate it:
+(An earlier version of this note attributed the symptom to force-deleting
+a pod leaving a stale driver lock. That was disproved on a live cluster:
+the same failure recurred on a node where every prior GPU-using pod had
+exited cleanly days earlier, with no force-delete anywhere in between.
+Restarting the MPS daemon "fixed" it by coincidence — the restart
+recreates the server's context, transiently freeing the slot — not because
+force-deletion was ever the actual trigger.)
 
-```bash
-kubectl get pod -n <gpu-operator-namespace> -o wide | grep mps-control-daemon-standalone
-kubectl delete pod -n <gpu-operator-namespace> mps-control-daemon-standalone-<node-suffix>
+**Fix**: switch GPU compute mode from `Exclusive_Process` to `Default`.
+`Default` mode allows multiple CUDA contexts on one GPU simultaneously, so
+the resident MPS server and a separate exclusive-mode client no longer
+fight over a single slot. This was verified live to not weaken MPS memory
+enforcement (`CUDA_MPS_PINNED_DEVICE_MEM_LIMIT` still OOMs a client at
+exactly its configured limit) and to not create a new double-booking risk
+for well-behaved pods, *provided* your scheduler's GPU reservation
+mechanism tracks a real Kubernetes extended resource that kubelet's own
+device manager enforces (so a second pod can't get the same physical GPU
+regardless of which scheduler placed it — verify this holds for your
+specific scheduler/sharing setup before relying on it).
+
+**Persistence gotcha**: setting compute mode with a one-off `nvidia-smi -c
+DEFAULT` is not durable if your MPS daemon runs as a container/pod — most
+MPS control daemon implementations reassert `Exclusive_Process` as part of
+their own startup, so the setting reverts on every restart (pod delete,
+node reboot, image upgrade). A one-shot "wait for the daemon to be ready,
+then set `Default` once" approach can also lose a race if any readiness
+marker your wrapper checks persists across restarts (e.g. on a hostPath
+volume) — the daemon's own asynchronous mode-setting can still run after
+your one-shot check passes, and wins. A background loop that re-asserts
+`Default` every few seconds for the daemon container's whole lifetime
+sidesteps this and self-heals against any future reassertion:
+
+```sh
+your-mps-control-daemon-binary &
+daemon_pid=$!
+while kill -0 "$daemon_pid" 2>/dev/null; do
+  nvidia-smi -c DEFAULT >/dev/null 2>&1
+  sleep 5
+done &
+wait "$daemon_pid"
 ```
 
-This cleanly tears down and re-establishes the MPS server's own context,
-which clears the stuck lock. Verified: a real 2-GPU PyTorch compute
-workload that failed deterministically before the daemon restart succeeded
-immediately after, with correct results on both devices. Try this before
-escalating to any lower-level GPU/VM reset — it's much cheaper and doesn't
-touch the actual workload pod.
+Check whether your GPU/device-plugin stack exposes a supported config
+option for this before reaching for a wrapper like the above — at time of
+writing, neither NVIDIA GPU Operator's `ClusterPolicy`/`NVIDIADriver` CRDs
+nor the device-plugin's MPS sharing config schema expose a compute-mode
+setting, so this had to be handled at the container-command level instead.
 
 ## How KAI schedules (but doesn't enforce) `gpu-memory`
 
