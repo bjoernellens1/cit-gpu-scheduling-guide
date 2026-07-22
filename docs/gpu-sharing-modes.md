@@ -83,6 +83,40 @@ trust the env var alone; test it.
 > confirm it against your own cluster's MPS daemon pod's volume mounts
 > before assuming this path is correct for you.
 
+## Gotcha: force-deleting a pod can leave a GPU stuck "busy" until the MPS daemon restarts
+
+**Symptom**: after force-deleting a pod that was mid-spawn/holding a GPU
+(`kubectl delete pod ... --grace-period=0 --force`), every subsequent real
+CUDA workload on that node's GPUs fails deterministically with
+`RuntimeError: CUDA error: CUDA-capable device(s) is/are busy or
+unavailable`, even in complete isolation (a single pod, no other workload,
+no other process shown by `nvidia-smi --query-compute-apps` other than
+`nvidia-cuda-mps-server`). `nvidia-smi` itself (query-only) still works
+fine, and ECC/throttle status is clean — this is not a hardware fault.
+
+**Root cause**: the GPUs backing an MPS control daemon run in
+`Exclusive_Process` compute mode (required for the MPS server's own
+context). Force-killing a client process mid-context-teardown — or just
+the general churn of pods rapidly claiming/releasing a device in this mode
+— can leave a stale exclusive-mode lock at the driver level that a plain
+`nvidia-smi --gpu-reset` cannot clear (`In use by another client`,
+referring to the still-running MPS server's own persistent context).
+
+**Fix (verified, no node power cycle needed)**: delete the standalone MPS
+control daemon pod on the affected node and let its DaemonSet recreate it:
+
+```bash
+kubectl get pod -n <gpu-operator-namespace> -o wide | grep mps-control-daemon-standalone
+kubectl delete pod -n <gpu-operator-namespace> mps-control-daemon-standalone-<node-suffix>
+```
+
+This cleanly tears down and re-establishes the MPS server's own context,
+which clears the stuck lock. Verified: a real 2-GPU PyTorch compute
+workload that failed deterministically before the daemon restart succeeded
+immediately after, with correct results on both devices. Try this before
+escalating to any lower-level GPU/VM reset — it's much cheaper and doesn't
+touch the actual workload pod.
+
 ## How KAI schedules (but doesn't enforce) `gpu-memory`
 
 KAI bin-packs `gpu-memory` requests against a physical GPU's advertised
