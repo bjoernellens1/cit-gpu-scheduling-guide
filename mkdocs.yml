@@ -1,0 +1,67 @@
+site_name: PyTorch & TensorFlow GPU Scheduling on KAI Scheduler
+site_description: >-
+  A practical, field-tested guide to scheduling PyTorch/TensorFlow GPU jobs
+  on Kubernetes clusters running NVIDIA KAI Scheduler.
+site_url: https://bjoernellens1.github.io/cit-gpu-scheduling-guide/
+repo_url: https://github.com/bjoernellens1/cit-gpu-scheduling-guide
+repo_name: bjoernellens1/cit-gpu-scheduling-guide
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+    - content.action.edit
+    - toc.follow
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - GPU sharing modes: gpu-sharing-modes.md
+  - Gang scheduling: gang-scheduling.md
+  - Multi-node networking: multi-node-networking.md
+  - Priority queues: priority-queues.md
+  - Storage: storage.md
+  - Ablator: ablator.md
+  - Cluster access: cluster-access.md
+
+plugins:
+  - search
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/bjoernellens1/cit-gpu-scheduling-guide

@@ -70,7 +70,7 @@ just doesn't hide it either.
 
 ## Worked example: the same job, two ways
 
-This guide's [`examples/single-gpu/pytorch-exclusive.yaml`](../examples/single-gpu/pytorch-exclusive.yaml)
+This guide's [`examples/single-gpu/pytorch-exclusive.yaml`](https://github.com/bjoernellens1/cit-gpu-scheduling-guide/blob/main/examples/single-gpu/pytorch-exclusive.yaml)
 is a whole-GPU, single-pod PyTorch training `Job` on the `batch` queue.
 Here's the equivalent expressed as an `ablator` config + spec instead of
 a raw manifest (based on ablator's actual

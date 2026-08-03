@@ -14,10 +14,19 @@ means the YAML examples are internally consistent with what the docs describe (c
 ## Structure
 
 - `docs/` — concept explainers (`gpu-sharing-modes.md`, `gang-scheduling.md`,
-  `multi-node-networking.md`, `priority-queues.md`, `storage.md`, `ablator.md`, `cluster-access.md`).
+  `multi-node-networking.md`, `priority-queues.md`, `storage.md`, `ablator.md`, `cluster-access.md`),
+  plus `docs/index.md` which is the MkDocs site homepage (kept in sync with root `README.md`, but
+  with `examples/*.yaml` links rewritten to absolute GitHub URLs since `examples/` lives outside
+  `docs_dir`).
 - `examples/` — template manifests organized by `single-gpu/`, `multi-gpu/`, `multi-node/`.
 - Root `README.md` is the entry point — Quick Start table + table of contents; keep both in sync
   when adding a new doc or example.
+- `mkdocs.yml` + `requirements-docs.txt` — MkDocs Material site config, built and published to
+  GitHub Pages by `.github/workflows/docs.yml` on every push to `main` that touches `docs/`,
+  `mkdocs.yml`, or the requirements file. Requires GitHub Pages set to "GitHub Actions" as the
+  source (Settings → Pages) for the workflow's `actions/deploy-pages` step to succeed. Test builds
+  locally with `mkdocs build --strict` (or `mkdocs serve` to preview) before pushing doc changes
+  that add new pages or nav entries — `--strict` fails on broken internal links.
 
 ## Load-bearing assumptions (see README's "Assumptions" section)
 
