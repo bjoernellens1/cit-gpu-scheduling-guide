@@ -57,6 +57,8 @@ nav:
   - Storage: storage.md
   - Ablator: ablator.md
   - Cluster access: cluster-access.md
+  - CPS platform architecture: cps-platform-architecture.md
+  - CPS live correctness review: cps-platform-live-review-2026-09-02.md
 
 plugins:
   - search
