@@ -105,7 +105,9 @@ cps
 
 This ensures all workloads for one user share the same fair-share ancestry. It prevents a user from receiving multiple independent shares by launching Jupyter, a desktop and several batch jobs simultaneously.
 
-User-level fairness is an upstream KAI roadmap item, so this queue materialization is an intentional compatibility layer that can be simplified later if KAI grows a mature native user accounting primitive.
+Current KAI supports hierarchical queue fairness and time-based fair-share at queue level. Native user-level fairness remains an upstream roadmap item, so this queue materialization is an intentional compatibility layer that can be simplified later if KAI grows a mature native user accounting primitive.
+
+Do not assume the human-readable JupyterHub username or email is the immutable identity key. The platform-side controller must verify the actual stable upstream Keycloak/JupyterHub identifier and map it to an opaque CPS user ID.
 
 ## Queue reconciliation
 
@@ -126,7 +128,7 @@ Properties:
 - lazy user-queue creation is allowed
 - deterministic queue names
 - no user-controlled parent/priority selection
-- safe garbage collection for inactive users/expired courses
+- safe garbage collection for inactive users/expired courses only after verifying no live/pending workloads or retained accounting references depend on the queue
 
 ## Workload metadata contract
 
@@ -167,6 +169,8 @@ Sweeps/backfill. No or minimal guaranteed quota; intended to consume idle capaci
 ### Services
 
 Persistent infrastructure/inference workloads with explicit reserved policy.
+
+The exact target-version PriorityClass and preemptibility mechanism must be qualified. The older field-tested v0.12.x `<100`/`>=100` behavior is historical evidence, not a configuration contract for current KAI.
 
 ## Remote desktops
 
@@ -213,6 +217,8 @@ The submitter owns:
 
 Notebook pods should not receive broad RBAC allowing arbitrary queue/priority/job creation.
 
+Do not assume the old v0.12.10 `gpu-memory` fractional-GPU API is unchanged on the target release; re-qualify the current KAI/GPU Operator sharing contract before exposing a shared-GPU job type.
+
 ## Fair share vs quota
 
 KAI queue fairness controls contested allocation. CPS usage accounting controls hard user/project budgets.
@@ -225,7 +231,7 @@ Examples of hard policy outside KAI fair-share:
 - course-specific shared-GPU budget
 - storage limits
 
-The submitter/spawner checks hard policy before creating work; admitted work then competes through KAI.
+The submitter/spawner checks hard policy before creating work; allowed work then competes through KAI.
 
 ## Metrics and dashboard integration
 
@@ -241,6 +247,8 @@ Admin view remains Grafana. User view should expose only their own allocation:
 - concurrent GPU use
 - storage usage
 - notifications
+
+The target KAI release exports queue fair-share and queue usage metrics for CPU, memory and GPU. Validate labels/roll-up semantics against the live deployment before treating them as the user-accounting source of truth.
 
 ## Notification architecture
 
@@ -264,7 +272,16 @@ Initial channels:
 4. SMTP email
 5. Microsoft Teams
 
-Gotify is the preferred self-hosted push transport. Use an application token owned by `cps-notifier`; do not put Gotify application tokens inside user jobs. If per-user Gotify routing is needed, store destinations/token references in platform secrets/preferences rather than job manifests.
+### Gotify routing
+
+Gotify is the preferred self-hosted push transport, but its application ownership model must be respected: a Gotify application belongs to a Gotify user and its messages are visible to that owner. A single notifier application token cannot selectively address arbitrary Gotify users.
+
+Support either/both:
+
+- a per-user Gotify application/token destination whose encrypted token/secret reference is managed by `cps-notifier`, or
+- an explicitly shared project/course/admin Gotify application for intentionally shared notifications.
+
+Never put Gotify application tokens in user Jobs or notebook manifests. If automatic Gotify provisioning is later added, isolate the privileged provisioning credential from normal delivery workers.
 
 Teams should use a currently supported mechanism such as Workflows/webhooks or a bot, not deprecated legacy connectors.
 
@@ -348,5 +365,6 @@ Keep the existing field-tested MPS enforcement checks. A shared-GPU request is n
 - KAI waiting reasons are visible to users.
 - Job completion/failure produces one durable notification and independent channel deliveries.
 - Gotify, email or Teams outage cannot affect scheduling/job execution.
+- Personal Gotify routing uses per-user application/token destinations or an explicitly shared destination model.
 - Hardware-accelerated Xpra is validated on GPU nodes; CPU desktop remains lightweight.
 - Time-based fair-share rollout has reproducible simulation/shadow evidence before affecting production users.
